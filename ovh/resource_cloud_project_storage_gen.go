@@ -18,7 +18,6 @@ import (
 	ovhtypes "github.com/ovh/terraform-provider-ovh/v2/ovh/types"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 )
@@ -98,14 +97,12 @@ func CloudProjectRegionStorageResourceSchema(ctx context.Context) schema.Schema 
 									"governance",
 								),
 							},
-							PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 						},
 						"period": schema.StringAttribute{
 							CustomType:          ovhtypes.TfStringType{},
 							Required:            true,
 							Description:         "Object lock retention period (ISO 8601 duration)",
 							MarkdownDescription: "Object lock retention period (ISO 8601 duration)",
-							PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 						},
 					},
 					CustomType: ObjectLockRuleType{
@@ -116,7 +113,6 @@ func CloudProjectRegionStorageResourceSchema(ctx context.Context) schema.Schema 
 					Optional:            true,
 					Description:         "Object lock default retention rule",
 					MarkdownDescription: "Object lock default retention rule",
-					PlanModifiers:       []planmodifier.Object{objectplanmodifier.RequiresReplace()},
 				},
 				"status": schema.StringAttribute{
 					CustomType:          ovhtypes.TfStringType{},
@@ -141,7 +137,6 @@ func CloudProjectRegionStorageResourceSchema(ctx context.Context) schema.Schema 
 			Computed:            true,
 			Description:         "Object lock configuration",
 			MarkdownDescription: "Object lock configuration",
-			PlanModifiers:       []planmodifier.Object{objectplanmodifier.RequiresReplace()},
 		},
 		"objects": schema.ListNestedAttribute{
 			NestedObject: schema.NestedAttributeObject{
