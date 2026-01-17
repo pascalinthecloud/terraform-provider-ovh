@@ -581,6 +581,10 @@ func (v CloudProjectRegionStorageModel) ToUpdate() *CloudProjectRegionStorageWri
 		res.Encryption = v.Encryption.ToUpdate()
 	}
 
+	if !v.ObjectLock.IsUnknown() {
+		res.ObjectLock = v.ObjectLock.ToCreate()
+	}
+
 	if !v.Replication.IsUnknown() {
 		res.Replication = v.Replication.ToUpdate()
 	}
