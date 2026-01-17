@@ -81,6 +81,7 @@ func (r *cloudProjectStorageResource) Create(ctx context.Context, req resource.C
 	}
 
 	responseData.MergeWith(&data)
+	r.fixISO8601Diff(&data, &responseData)
 
 	// Set the ID as composite key: service_name/region_name/name
 	compositeID := fmt.Sprintf("%s/%s/%s",
@@ -131,6 +132,7 @@ func (r *cloudProjectStorageResource) Read(ctx context.Context, req resource.Rea
 	}
 
 	responseData.MergeWith(&data)
+	r.fixISO8601Diff(&data, &responseData)
 
 	if data.HideObjects.ValueBool() {
 		responseData.Objects = ovhtypes.NewListNestedObjectValueOfNull[ObjectsValue](ctx)
@@ -195,6 +197,7 @@ func (r *cloudProjectStorageResource) Update(ctx context.Context, req resource.U
 	}
 
 	responseData.MergeWith(&planData)
+	r.fixISO8601Diff(&planData, &responseData)
 
 	if planData.HideObjects.ValueBool() {
 		responseData.Objects = ovhtypes.NewListNestedObjectValueOfNull[ObjectsValue](ctx)
@@ -308,4 +311,56 @@ func (r *cloudProjectStorageResource) deleteBucket(ctx context.Context, serviceN
 	}
 
 	return nil
+}
+
+func (r *cloudProjectStorageResource) fixISO8601Diff(expected, actual *CloudProjectRegionStorageModel) {
+	if expected.ObjectLock.IsNull() || expected.ObjectLock.IsUnknown() ||
+		actual.ObjectLock.IsNull() || actual.ObjectLock.IsUnknown() {
+		return
+	}
+
+	if expected.ObjectLock.Rule.IsNull() || expected.ObjectLock.Rule.IsUnknown() ||
+		actual.ObjectLock.Rule.IsNull() || actual.ObjectLock.Rule.IsUnknown() {
+		return
+	}
+
+	expectedPeriod := expected.ObjectLock.Rule.Period.ValueString()
+	actualPeriod := actual.ObjectLock.Rule.Period.ValueString()
+
+	if expectedPeriod == actualPeriod {
+		return
+	}
+
+	// Helper to parse simple ISO 8601 duration (P<n>D or P<n>W)
+	parseDuration := func(s string) (int, error) {
+		s = strings.ToUpper(s)
+		if !strings.HasPrefix(s, "P") {
+			return 0, fmt.Errorf("invalid prefix")
+		}
+		s = s[1:]
+
+		if strings.HasSuffix(s, "D") {
+			val, err := strconv.Atoi(s[:len(s)-1])
+			if err != nil {
+				return 0, err
+			}
+			return val, nil
+		}
+		if strings.HasSuffix(s, "W") {
+			val, err := strconv.Atoi(s[:len(s)-1])
+			if err != nil {
+				return 0, err
+			}
+			return val * 7, nil
+		}
+		return 0, fmt.Errorf("unsupported suffix")
+	}
+
+	expectedDays, err1 := parseDuration(expectedPeriod)
+	actualDays, err2 := parseDuration(actualPeriod)
+
+	if err1 == nil && err2 == nil && expectedDays == actualDays {
+		// If semantically equal, update actual to match expected to avoid Terraform diff
+		actual.ObjectLock.Rule.Period = expected.ObjectLock.Rule.Period
+	}
 }

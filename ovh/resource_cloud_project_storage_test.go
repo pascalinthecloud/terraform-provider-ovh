@@ -173,3 +173,132 @@ func TestAccCloudProjectRegionStorage_withReplication(t *testing.T) {
 		},
 	})
 }
+
+func TestAccCloudProjectRegionStorage_withObjectLock(t *testing.T) {
+	bucketName := acctest.RandomWithPrefix(test_prefix)
+	serviceName := os.Getenv("OVH_CLOUD_PROJECT_SERVICE_TEST")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheckCloud(t); testAccCheckCloudProjectExists(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Case 1: P7D (7 days) -> Expect API to return P1W, provider should handle it.
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P7D"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "name", bucketName),
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.status", "enabled"),
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.mode", "compliance"),
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P7D"),
+				),
+			},
+			// Case 2: Update to P2W (2 weeks) -> Standard weeks format.
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P2W"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P2W"),
+				),
+			},
+			// Case 3: Update to P14D (14 days) -> Expect API to return P2W, provider should handle it.
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P14D"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P14D"),
+				),
+			},
+			// Case 4: Update to P1D (1 Day) -> Smallest unit.
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P1D"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P1D"),
+				),
+			},
+			// Case 5: Update to P8D (8 Days) -> Not divisible by 7. Expect API to keep P8D or handle accordingly.
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P8D"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P8D"),
+				),
+			},
+			// Case 6: Update to P364D (364 Days) -> 52 Weeks. Expect API to likely return P52W.
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P364D"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P364D"),
+				),
+			},
+		},
+	})
+}

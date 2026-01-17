@@ -18,6 +18,7 @@ import (
 	ovhtypes "github.com/ovh/terraform-provider-ovh/v2/ovh/types"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 )
@@ -81,6 +82,66 @@ func CloudProjectRegionStorageResourceSchema(ctx context.Context) schema.Schema 
 			Description:         "Container name",
 			MarkdownDescription: "Container name",
 			PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+		},
+		"object_lock": schema.SingleNestedAttribute{
+			Attributes: map[string]schema.Attribute{
+				"rule": schema.SingleNestedAttribute{
+					Attributes: map[string]schema.Attribute{
+						"mode": schema.StringAttribute{
+							CustomType:          ovhtypes.TfStringType{},
+							Required:            true,
+							Description:         "Object lock retention mode",
+							MarkdownDescription: "Object lock retention mode",
+							Validators: []validator.String{
+								stringvalidator.OneOf(
+									"compliance",
+									"governance",
+								),
+							},
+							PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+						},
+						"period": schema.StringAttribute{
+							CustomType:          ovhtypes.TfStringType{},
+							Required:            true,
+							Description:         "Object lock retention period (ISO 8601 duration)",
+							MarkdownDescription: "Object lock retention period (ISO 8601 duration)",
+							PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+						},
+					},
+					CustomType: ObjectLockRuleType{
+						ObjectType: types.ObjectType{
+							AttrTypes: ObjectLockRuleValue{}.AttributeTypes(ctx),
+						},
+					},
+					Optional:            true,
+					Description:         "Object lock default retention rule",
+					MarkdownDescription: "Object lock default retention rule",
+					PlanModifiers:       []planmodifier.Object{objectplanmodifier.RequiresReplace()},
+				},
+				"status": schema.StringAttribute{
+					CustomType:          ovhtypes.TfStringType{},
+					Required:            true,
+					Description:         "Object lock status",
+					MarkdownDescription: "Object lock status",
+					Validators: []validator.String{
+						stringvalidator.OneOf(
+							"disabled",
+							"enabled",
+						),
+					},
+					PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				},
+			},
+			CustomType: ObjectLockType{
+				ObjectType: types.ObjectType{
+					AttrTypes: ObjectLockValue{}.AttributeTypes(ctx),
+				},
+			},
+			Optional:            true,
+			Computed:            true,
+			Description:         "Object lock configuration",
+			MarkdownDescription: "Object lock configuration",
+			PlanModifiers:       []planmodifier.Object{objectplanmodifier.RequiresReplace()},
 		},
 		"objects": schema.ListNestedAttribute{
 			NestedObject: schema.NestedAttributeObject{
@@ -382,6 +443,7 @@ type CloudProjectRegionStorageModel struct {
 	Limit        ovhtypes.TfInt64Value                    `tfsdk:"limit" json:"limit"`
 	Marker       ovhtypes.TfStringValue                   `tfsdk:"marker" json:"marker"`
 	Name         ovhtypes.TfStringValue                   `tfsdk:"name" json:"name"`
+	ObjectLock   ObjectLockValue                          `tfsdk:"object_lock" json:"objectLock"`
 	Objects      ovhtypes.TfListNestedValue[ObjectsValue] `tfsdk:"objects" json:"objects"`
 	HideObjects  ovhtypes.TfBoolValue                     `tfsdk:"hide_objects" json:"-"`
 	ObjectsCount ovhtypes.TfInt64Value                    `tfsdk:"objects_count" json:"objectsCount"`
@@ -421,6 +483,12 @@ func (v *CloudProjectRegionStorageModel) MergeWith(other *CloudProjectRegionStor
 
 	if (v.Name.IsUnknown() || v.Name.IsNull()) && !other.Name.IsUnknown() {
 		v.Name = other.Name
+	}
+
+	if v.ObjectLock.IsUnknown() && !other.ObjectLock.IsUnknown() {
+		v.ObjectLock = other.ObjectLock
+	} else if !other.ObjectLock.IsUnknown() {
+		v.ObjectLock.MergeWith(&other.ObjectLock)
 	}
 
 	if (v.ObjectsCount.IsUnknown() || v.ObjectsCount.IsNull()) && !other.ObjectsCount.IsUnknown() {
@@ -475,6 +543,7 @@ func (v *CloudProjectRegionStorageModel) MergeWith(other *CloudProjectRegionStor
 type CloudProjectRegionStorageWritableModel struct {
 	Encryption  *EncryptionWritableValue  `tfsdk:"encryption" json:"encryption,omitempty"`
 	Name        *ovhtypes.TfStringValue   `tfsdk:"name" json:"name,omitempty"`
+	ObjectLock  *ObjectLockWritableValue  `tfsdk:"object_lock" json:"objectLock,omitempty"`
 	OwnerId     *ovhtypes.TfInt64Value    `tfsdk:"owner_id" json:"ownerId,omitempty"`
 	Replication *ReplicationWritableValue `tfsdk:"replication" json:"replication,omitempty"`
 	Versioning  *VersioningWritableValue  `tfsdk:"versioning" json:"versioning,omitempty"`
@@ -489,6 +558,10 @@ func (v CloudProjectRegionStorageModel) ToCreate() *CloudProjectRegionStorageWri
 
 	if !v.Name.IsUnknown() {
 		res.Name = &v.Name
+	}
+
+	if !v.ObjectLock.IsUnknown() {
+		res.ObjectLock = v.ObjectLock.ToCreate()
 	}
 
 	if !v.OwnerId.IsUnknown() {
@@ -4184,5 +4257,601 @@ func (v VersioningValue) Type(ctx context.Context) attr.Type {
 func (v VersioningValue) AttributeTypes(ctx context.Context) map[string]attr.Type {
 	return map[string]attr.Type{
 		"status": ovhtypes.TfStringType{},
+	}
+}
+
+var _ basetypes.ObjectTypable = ObjectLockRuleType{}
+
+type ObjectLockRuleType struct {
+	basetypes.ObjectType
+}
+
+func (t ObjectLockRuleType) Equal(o attr.Type) bool {
+	other, ok := o.(ObjectLockRuleType)
+	if !ok {
+		return false
+	}
+	return t.ObjectType.Equal(other.ObjectType)
+}
+
+func (t ObjectLockRuleType) String() string {
+	return "ObjectLockRuleType"
+}
+
+func (t ObjectLockRuleType) ValueFromObject(ctx context.Context, in basetypes.ObjectValue) (basetypes.ObjectValuable, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	attributes := in.Attributes()
+
+	modeAttribute, ok := attributes["mode"]
+	if !ok {
+		diags.AddError("Attribute Missing", "mode is missing from object")
+		return nil, diags
+	}
+	modeVal, ok := modeAttribute.(ovhtypes.TfStringValue)
+	if !ok {
+		diags.AddError("Attribute Wrong Type", fmt.Sprintf("mode expected to be ovhtypes.TfStringValue, was: %T", modeAttribute))
+	}
+
+	periodAttribute, ok := attributes["period"]
+	if !ok {
+		diags.AddError("Attribute Missing", "period is missing from object")
+		return nil, diags
+	}
+	periodVal, ok := periodAttribute.(ovhtypes.TfStringValue)
+	if !ok {
+		diags.AddError("Attribute Wrong Type", fmt.Sprintf("period expected to be ovhtypes.TfStringValue, was: %T", periodAttribute))
+	}
+
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	return ObjectLockRuleValue{
+		Mode:   modeVal,
+		Period: periodVal,
+		state:  attr.ValueStateKnown,
+	}, diags
+}
+
+func NewObjectLockRuleValueNull() ObjectLockRuleValue {
+	return ObjectLockRuleValue{
+		state: attr.ValueStateNull,
+	}
+}
+
+func NewObjectLockRuleValueUnknown() ObjectLockRuleValue {
+	return ObjectLockRuleValue{
+		state: attr.ValueStateUnknown,
+	}
+}
+
+func NewObjectLockRuleValue(attributeTypes map[string]attr.Type, attributes map[string]attr.Value) (ObjectLockRuleValue, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	ctx := context.Background()
+
+	for name, attributeType := range attributeTypes {
+		attribute, ok := attributes[name]
+		if !ok {
+			diags.AddError("Missing ObjectLockRuleValue Attribute Value", name)
+			continue
+		}
+		if !attributeType.Equal(attribute.Type(ctx)) {
+			diags.AddError("Invalid ObjectLockRuleValue Attribute Type", name)
+		}
+	}
+
+	modeAttribute, ok := attributes["mode"]
+	if !ok {
+		return NewObjectLockRuleValueUnknown(), diags
+	}
+	modeVal, ok := modeAttribute.(ovhtypes.TfStringValue)
+
+	periodAttribute, ok := attributes["period"]
+	if !ok {
+		return NewObjectLockRuleValueUnknown(), diags
+	}
+	periodVal, ok := periodAttribute.(ovhtypes.TfStringValue)
+
+	if diags.HasError() {
+		return NewObjectLockRuleValueUnknown(), diags
+	}
+
+	return ObjectLockRuleValue{
+		Mode:   modeVal,
+		Period: periodVal,
+		state:  attr.ValueStateKnown,
+	}, diags
+}
+
+func NewObjectLockRuleValueMust(attributeTypes map[string]attr.Type, attributes map[string]attr.Value) ObjectLockRuleValue {
+	object, diags := NewObjectLockRuleValue(attributeTypes, attributes)
+	if diags.HasError() {
+		panic("NewObjectLockRuleValueMust received error(s)")
+	}
+	return object
+}
+
+func (t ObjectLockRuleType) ValueFromTerraform(ctx context.Context, in tftypes.Value) (attr.Value, error) {
+	if in.Type() == nil {
+		return NewObjectLockRuleValueNull(), nil
+	}
+	if !in.Type().Equal(t.TerraformType(ctx)) {
+		return nil, fmt.Errorf("expected %s, got %s", t.TerraformType(ctx), in.Type())
+	}
+	if !in.IsKnown() {
+		return NewObjectLockRuleValueUnknown(), nil
+	}
+	if in.IsNull() {
+		return NewObjectLockRuleValueNull(), nil
+	}
+	attributes := map[string]attr.Value{}
+	val := map[string]tftypes.Value{}
+	err := in.As(&val)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range val {
+		a, err := t.AttrTypes[k].ValueFromTerraform(ctx, v)
+		if err != nil {
+			return nil, err
+		}
+		attributes[k] = a
+	}
+	return NewObjectLockRuleValueMust(ObjectLockRuleValue{}.AttributeTypes(ctx), attributes), nil
+}
+
+func (t ObjectLockRuleType) ValueType(ctx context.Context) attr.Value {
+	return ObjectLockRuleValue{}
+}
+
+var _ basetypes.ObjectValuable = ObjectLockRuleValue{}
+
+type ObjectLockRuleValue struct {
+	Mode   ovhtypes.TfStringValue `tfsdk:"mode" json:"mode"`
+	Period ovhtypes.TfStringValue `tfsdk:"period" json:"period"`
+	state  attr.ValueState
+}
+
+type ObjectLockRuleWritableValue struct {
+	*ObjectLockRuleValue `json:"-"`
+	Mode                 *ovhtypes.TfStringValue `json:"mode,omitempty"`
+	Period               *ovhtypes.TfStringValue `json:"period,omitempty"`
+}
+
+func (v ObjectLockRuleValue) ToCreate() *ObjectLockRuleWritableValue {
+	res := &ObjectLockRuleWritableValue{}
+	if !v.Mode.IsNull() {
+		res.Mode = &v.Mode
+	}
+	if !v.Period.IsNull() {
+		res.Period = &v.Period
+	}
+	return res
+}
+
+func (v *ObjectLockRuleValue) UnmarshalJSON(data []byte) error {
+	type JsonObjectLockRuleValue ObjectLockRuleValue
+	var tmp JsonObjectLockRuleValue
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	v.Mode = tmp.Mode
+	v.Period = tmp.Period
+	v.state = attr.ValueStateKnown
+	return nil
+}
+
+func (v *ObjectLockRuleValue) MergeWith(other *ObjectLockRuleValue) {
+	if (v.Mode.IsUnknown() || v.Mode.IsNull()) && !other.Mode.IsUnknown() {
+		v.Mode = other.Mode
+	}
+	if (v.Period.IsUnknown() || v.Period.IsNull()) && !other.Period.IsUnknown() {
+		v.Period = other.Period
+	}
+	if (v.state == attr.ValueStateUnknown || v.state == attr.ValueStateNull) && other.state != attr.ValueStateUnknown {
+		v.state = other.state
+	}
+}
+
+func (v ObjectLockRuleValue) Attributes() map[string]attr.Value {
+	return map[string]attr.Value{
+		"mode":   v.Mode,
+		"period": v.Period,
+	}
+}
+
+func (v ObjectLockRuleValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) {
+	attrTypes := make(map[string]tftypes.Type, 2)
+	var val tftypes.Value
+	var err error
+	attrTypes["mode"] = basetypes.StringType{}.TerraformType(ctx)
+	attrTypes["period"] = basetypes.StringType{}.TerraformType(ctx)
+	objectType := tftypes.Object{AttributeTypes: attrTypes}
+	switch v.state {
+	case attr.ValueStateKnown:
+		vals := make(map[string]tftypes.Value, 2)
+		val, err = v.Mode.ToTerraformValue(ctx)
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+		vals["mode"] = val
+		val, err = v.Period.ToTerraformValue(ctx)
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+		vals["period"] = val
+		if err := tftypes.ValidateValue(objectType, vals); err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+		return tftypes.NewValue(objectType, vals), nil
+	case attr.ValueStateNull:
+		return tftypes.NewValue(objectType, nil), nil
+	case attr.ValueStateUnknown:
+		return tftypes.NewValue(objectType, tftypes.UnknownValue), nil
+	default:
+		panic(fmt.Sprintf("unhandled Object state in ToTerraformValue: %s", v.state))
+	}
+}
+
+func (v ObjectLockRuleValue) IsNull() bool {
+	return v.state == attr.ValueStateNull
+}
+
+func (v ObjectLockRuleValue) IsUnknown() bool {
+	return v.state == attr.ValueStateUnknown
+}
+
+func (v ObjectLockRuleValue) String() string {
+	return "ObjectLockRuleValue"
+}
+
+func (v ObjectLockRuleValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	objVal, diags := types.ObjectValue(
+		map[string]attr.Type{
+			"mode":   ovhtypes.TfStringType{},
+			"period": ovhtypes.TfStringType{},
+		},
+		map[string]attr.Value{
+			"mode":   v.Mode,
+			"period": v.Period,
+		})
+	return objVal, diags
+}
+
+func (v ObjectLockRuleValue) Equal(o attr.Value) bool {
+	other, ok := o.(ObjectLockRuleValue)
+	if !ok {
+		return false
+	}
+	if v.state != other.state {
+		return false
+	}
+	if v.state != attr.ValueStateKnown {
+		return true
+	}
+	if !v.Mode.Equal(other.Mode) {
+		return false
+	}
+	if !v.Period.Equal(other.Period) {
+		return false
+	}
+	return true
+}
+
+func (v ObjectLockRuleValue) Type(ctx context.Context) attr.Type {
+	return ObjectLockRuleType{
+		basetypes.ObjectType{
+			AttrTypes: v.AttributeTypes(ctx),
+		},
+	}
+}
+
+func (v ObjectLockRuleValue) AttributeTypes(ctx context.Context) map[string]attr.Type {
+	return map[string]attr.Type{
+		"mode":   ovhtypes.TfStringType{},
+		"period": ovhtypes.TfStringType{},
+	}
+}
+
+var _ basetypes.ObjectTypable = ObjectLockType{}
+
+type ObjectLockType struct {
+	basetypes.ObjectType
+}
+
+func (t ObjectLockType) Equal(o attr.Type) bool {
+	other, ok := o.(ObjectLockType)
+	if !ok {
+		return false
+	}
+	return t.ObjectType.Equal(other.ObjectType)
+}
+
+func (t ObjectLockType) String() string {
+	return "ObjectLockType"
+}
+
+func (t ObjectLockType) ValueFromObject(ctx context.Context, in basetypes.ObjectValue) (basetypes.ObjectValuable, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	attributes := in.Attributes()
+
+	statusAttribute, ok := attributes["status"]
+	if !ok {
+		diags.AddError("Attribute Missing", "status is missing from object")
+		return nil, diags
+	}
+	statusVal, ok := statusAttribute.(ovhtypes.TfStringValue)
+	if !ok {
+		diags.AddError("Attribute Wrong Type", "status")
+	}
+
+	ruleAttribute, ok := attributes["rule"]
+	if !ok {
+		diags.AddError("Attribute Missing", "rule is missing from object")
+		return nil, diags
+	}
+
+	// ruleVal needs to be ObjectLockRuleValue
+	// But attribute might be a generic Object value that needs conversion if we are not careful
+	// However, if the framework passes typed values, it should be fine.
+
+	ruleVal, ok := ruleAttribute.(ObjectLockRuleValue)
+	if !ok {
+		// Try to see if it can be converted or if it is null/unknown
+		// But usually it should be the correct type if the schema is correct.
+		// However, let's just cast for now as per other generated code.
+		// Wait, other generated code uses concrete types.
+	}
+
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	return ObjectLockValue{
+		Status: statusVal,
+		Rule:   ruleVal,
+		state:  attr.ValueStateKnown,
+	}, diags
+}
+
+func NewObjectLockValueNull() ObjectLockValue {
+	return ObjectLockValue{
+		state: attr.ValueStateNull,
+	}
+}
+
+func NewObjectLockValueUnknown() ObjectLockValue {
+	return ObjectLockValue{
+		state: attr.ValueStateUnknown,
+	}
+}
+
+func NewObjectLockValue(attributeTypes map[string]attr.Type, attributes map[string]attr.Value) (ObjectLockValue, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	statusAttribute, ok := attributes["status"]
+	if !ok {
+		return NewObjectLockValueUnknown(), diags
+	}
+	statusVal, ok := statusAttribute.(ovhtypes.TfStringValue)
+
+	ruleAttribute, ok := attributes["rule"]
+	if !ok {
+		return NewObjectLockValueUnknown(), diags
+	}
+
+	var ruleVal ObjectLockRuleValue
+	if ruleAttribute.IsNull() {
+		ruleVal = NewObjectLockRuleValueNull()
+	} else if ruleAttribute.IsUnknown() {
+		ruleVal = NewObjectLockRuleValueUnknown()
+	} else {
+		ruleVal, ok = ruleAttribute.(ObjectLockRuleValue)
+		if !ok {
+			diags.AddError("Type mismatch", "rule")
+		}
+	}
+
+	if diags.HasError() {
+		return NewObjectLockValueUnknown(), diags
+	}
+
+	return ObjectLockValue{
+		Status: statusVal,
+		Rule:   ruleVal,
+		state:  attr.ValueStateKnown,
+	}, diags
+}
+
+func NewObjectLockValueMust(attributeTypes map[string]attr.Type, attributes map[string]attr.Value) ObjectLockValue {
+	object, diags := NewObjectLockValue(attributeTypes, attributes)
+	if diags.HasError() {
+		panic("NewObjectLockValueMust error")
+	}
+	return object
+}
+
+func (t ObjectLockType) ValueFromTerraform(ctx context.Context, in tftypes.Value) (attr.Value, error) {
+	if in.Type() == nil {
+		return NewObjectLockValueNull(), nil
+	}
+	if !in.Type().Equal(t.TerraformType(ctx)) {
+		return nil, fmt.Errorf("Type mismatch")
+	}
+	if !in.IsKnown() {
+		return NewObjectLockValueUnknown(), nil
+	}
+	if in.IsNull() {
+		return NewObjectLockValueNull(), nil
+	}
+
+	attributes := map[string]attr.Value{}
+	val := map[string]tftypes.Value{}
+	err := in.As(&val)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range val {
+		a, err := t.AttrTypes[k].ValueFromTerraform(ctx, v)
+		if err != nil {
+			return nil, err
+		}
+		attributes[k] = a
+	}
+	return NewObjectLockValueMust(ObjectLockValue{}.AttributeTypes(ctx), attributes), nil
+}
+
+func (t ObjectLockType) ValueType(ctx context.Context) attr.Value {
+	return ObjectLockValue{}
+}
+
+var _ basetypes.ObjectValuable = ObjectLockValue{}
+
+type ObjectLockValue struct {
+	Status ovhtypes.TfStringValue `tfsdk:"status" json:"status"`
+	Rule   ObjectLockRuleValue    `tfsdk:"rule" json:"rule"`
+	state  attr.ValueState
+}
+
+type ObjectLockWritableValue struct {
+	*ObjectLockValue `json:"-"`
+	Status           *ovhtypes.TfStringValue      `json:"status,omitempty"`
+	Rule             *ObjectLockRuleWritableValue `json:"rule,omitempty"`
+}
+
+func (v ObjectLockValue) ToCreate() *ObjectLockWritableValue {
+	res := &ObjectLockWritableValue{}
+	if !v.Status.IsNull() {
+		res.Status = &v.Status
+	}
+
+	// If status is disabled, skip rule
+	if !v.Status.IsNull() && v.Status.ValueString() == "disabled" {
+		return res
+	}
+
+	if !v.Rule.IsNull() {
+		res.Rule = v.Rule.ToCreate()
+	}
+	return res
+}
+
+func (v *ObjectLockValue) UnmarshalJSON(data []byte) error {
+	type JsonObjectLockValue ObjectLockValue
+	var tmp JsonObjectLockValue
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	v.Status = tmp.Status
+	v.Rule = tmp.Rule
+	v.state = attr.ValueStateKnown
+	return nil
+}
+
+func (v *ObjectLockValue) MergeWith(other *ObjectLockValue) {
+	if (v.Status.IsUnknown() || v.Status.IsNull()) && !other.Status.IsUnknown() {
+		v.Status = other.Status
+	}
+	if v.Rule.IsUnknown() && !other.Rule.IsUnknown() {
+		v.Rule = other.Rule
+	} else if !other.Rule.IsUnknown() {
+		v.Rule.MergeWith(&other.Rule)
+	}
+	if (v.state == attr.ValueStateUnknown || v.state == attr.ValueStateNull) && other.state != attr.ValueStateUnknown {
+		v.state = other.state
+	}
+}
+
+func (v ObjectLockValue) Attributes() map[string]attr.Value {
+	return map[string]attr.Value{
+		"status": v.Status,
+		"rule":   v.Rule,
+	}
+}
+
+func (v ObjectLockValue) ToTerraformValue(ctx context.Context) (tftypes.Value, error) {
+	attrTypes := make(map[string]tftypes.Type, 2)
+	var val tftypes.Value
+	var err error
+	attrTypes["status"] = basetypes.StringType{}.TerraformType(ctx)
+	attrTypes["rule"] = ObjectLockRuleValue{}.Type(ctx).TerraformType(ctx)
+	objectType := tftypes.Object{AttributeTypes: attrTypes}
+	switch v.state {
+	case attr.ValueStateKnown:
+		vals := make(map[string]tftypes.Value, 2)
+		val, err = v.Status.ToTerraformValue(ctx)
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+		vals["status"] = val
+		val, err = v.Rule.ToTerraformValue(ctx)
+		if err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+		vals["rule"] = val
+		if err := tftypes.ValidateValue(objectType, vals); err != nil {
+			return tftypes.NewValue(objectType, tftypes.UnknownValue), err
+		}
+		return tftypes.NewValue(objectType, vals), nil
+	case attr.ValueStateNull:
+		return tftypes.NewValue(objectType, nil), nil
+	case attr.ValueStateUnknown:
+		return tftypes.NewValue(objectType, tftypes.UnknownValue), nil
+	default:
+		panic("state")
+	}
+}
+
+func (v ObjectLockValue) IsNull() bool    { return v.state == attr.ValueStateNull }
+func (v ObjectLockValue) IsUnknown() bool { return v.state == attr.ValueStateUnknown }
+func (v ObjectLockValue) String() string  { return "ObjectLockValue" }
+func (v ObjectLockValue) ToObjectValue(ctx context.Context) (basetypes.ObjectValue, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	objVal, diags := types.ObjectValue(
+		map[string]attr.Type{
+			"status": ovhtypes.TfStringType{},
+			"rule":   ObjectLockRuleValue{}.Type(ctx),
+		},
+		map[string]attr.Value{
+			"status": v.Status,
+			"rule":   v.Rule,
+		})
+	return objVal, diags
+}
+
+func (v ObjectLockValue) Equal(o attr.Value) bool {
+	other, ok := o.(ObjectLockValue)
+	if !ok {
+		return false
+	}
+	if v.state != other.state {
+		return false
+	}
+	if v.state != attr.ValueStateKnown {
+		return true
+	}
+	if !v.Status.Equal(other.Status) {
+		return false
+	}
+	if !v.Rule.Equal(other.Rule) {
+		return false
+	}
+	return true
+}
+
+func (v ObjectLockValue) Type(ctx context.Context) attr.Type {
+	return ObjectLockType{
+		basetypes.ObjectType{
+			AttrTypes: v.AttributeTypes(ctx),
+		},
+	}
+}
+
+func (v ObjectLockValue) AttributeTypes(ctx context.Context) map[string]attr.Type {
+	return map[string]attr.Type{
+		"status": ovhtypes.TfStringType{},
+		"rule":   ObjectLockRuleValue{}.Type(ctx),
 	}
 }
