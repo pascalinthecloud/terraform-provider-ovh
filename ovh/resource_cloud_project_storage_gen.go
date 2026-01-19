@@ -83,60 +83,58 @@ func CloudProjectRegionStorageResourceSchema(ctx context.Context) schema.Schema 
 			PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 		},
 		"object_lock": schema.SingleNestedAttribute{
-			Attributes: map[string]schema.Attribute{
-				"rule": schema.SingleNestedAttribute{
-					Attributes: map[string]schema.Attribute{
-						"mode": schema.StringAttribute{
-							CustomType:          ovhtypes.TfStringType{},
-							Required:            true,
-							Description:         "Object lock retention mode",
-							MarkdownDescription: "Object lock retention mode",
-							Validators: []validator.String{
-								stringvalidator.OneOf(
-									"compliance",
-									"governance",
-								),
-							},
-						},
-						"period": schema.StringAttribute{
-							CustomType:          ovhtypes.TfStringType{},
-							Required:            true,
-							Description:         "Object lock retention period (ISO 8601 duration)",
-							MarkdownDescription: "Object lock retention period (ISO 8601 duration)",
-						},
-					},
-					CustomType: ObjectLockRuleType{
-						ObjectType: types.ObjectType{
-							AttrTypes: ObjectLockRuleValue{}.AttributeTypes(ctx),
-						},
-					},
-					Optional:            true,
-					Description:         "Object lock default retention rule",
-					MarkdownDescription: "Object lock default retention rule",
-				},
-				"status": schema.StringAttribute{
-					CustomType:          ovhtypes.TfStringType{},
-					Required:            true,
-					Description:         "Object lock status",
-					MarkdownDescription: "Object lock status",
-					Validators: []validator.String{
-						stringvalidator.OneOf(
-							"disabled",
-							"enabled",
-						),
-					},
-					PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
-				},
-			},
+			Optional:            true,
+			Computed:            true,
+			Description:         "Object lock configuration. Warning: Removing this block or setting status to 'disabled' forces resource recreation (Data Loss).",
+			MarkdownDescription: "Object lock configuration. **Warning**: Removing this block or setting status to 'disabled' forces resource recreation (Data Loss).",
 			CustomType: ObjectLockType{
 				ObjectType: types.ObjectType{
 					AttrTypes: ObjectLockValue{}.AttributeTypes(ctx),
 				},
 			},
-			Optional:            true,
-			Computed:            true,
-			Description:         "Object lock configuration",
-			MarkdownDescription: "Object lock configuration",
+			PlanModifiers: []planmodifier.Object{
+				// Custom modifier to handle the "Sticky Computed State" problem
+				customObjectLockModifier{},
+			},
+			Attributes: map[string]schema.Attribute{
+				"status": schema.StringAttribute{
+					CustomType:  ovhtypes.TfStringType{},
+					Optional:    true,
+					Computed:    true,
+					Description: "Object lock status (enabled/disabled)",
+					Validators: []validator.String{
+						stringvalidator.OneOf("disabled", "enabled"),
+					},
+					PlanModifiers: []planmodifier.String{
+						stringplanmodifier.RequiresReplace(),
+					},
+				},
+				"rule": schema.SingleNestedAttribute{
+					Optional: true,
+					Computed: false,
+					CustomType: ObjectLockRuleType{
+						ObjectType: types.ObjectType{
+							AttrTypes: ObjectLockRuleValue{}.AttributeTypes(ctx),
+						},
+					},
+					Attributes: map[string]schema.Attribute{
+						"mode": schema.StringAttribute{
+							CustomType: ovhtypes.TfStringType{},
+							Optional:   true,
+							Computed:   true,
+							Validators: []validator.String{
+								stringvalidator.OneOf("compliance", "governance"),
+							},
+						},
+						"period": schema.StringAttribute{
+							CustomType:  ovhtypes.TfStringType{},
+							Optional:    true,
+							Computed:    true,
+							Description: "Retention period (ISO 8601 duration, e.g., P30D or P1W)",
+						},
+					},
+				},
+			},
 		},
 		"objects": schema.ListNestedAttribute{
 			NestedObject: schema.NestedAttributeObject{
@@ -555,7 +553,7 @@ func (v CloudProjectRegionStorageModel) ToCreate() *CloudProjectRegionStorageWri
 		res.Name = &v.Name
 	}
 
-	if !v.ObjectLock.IsUnknown() {
+	if !v.ObjectLock.IsUnknown() && !v.ObjectLock.IsNull() {
 		res.ObjectLock = v.ObjectLock.ToCreate()
 	}
 
@@ -581,7 +579,7 @@ func (v CloudProjectRegionStorageModel) ToUpdate() *CloudProjectRegionStorageWri
 		res.Encryption = v.Encryption.ToUpdate()
 	}
 
-	if !v.ObjectLock.IsUnknown() {
+	if !v.ObjectLock.IsUnknown() && !v.ObjectLock.IsNull() {
 		res.ObjectLock = v.ObjectLock.ToCreate()
 	}
 
@@ -4442,13 +4440,13 @@ func (v *ObjectLockRuleValue) UnmarshalJSON(data []byte) error {
 }
 
 func (v *ObjectLockRuleValue) MergeWith(other *ObjectLockRuleValue) {
-	if (v.Mode.IsUnknown() || v.Mode.IsNull()) && !other.Mode.IsUnknown() {
+	if !other.Mode.IsUnknown() {
 		v.Mode = other.Mode
 	}
-	if (v.Period.IsUnknown() || v.Period.IsNull()) && !other.Period.IsUnknown() {
+	if !other.Period.IsUnknown() {
 		v.Period = other.Period
 	}
-	if (v.state == attr.ValueStateUnknown || v.state == attr.ValueStateNull) && other.state != attr.ValueStateUnknown {
+	if other.state != attr.ValueStateUnknown {
 		v.state = other.state
 	}
 }
@@ -4717,7 +4715,7 @@ type ObjectLockValue struct {
 type ObjectLockWritableValue struct {
 	*ObjectLockValue `json:"-"`
 	Status           *ovhtypes.TfStringValue      `json:"status,omitempty"`
-	Rule             *ObjectLockRuleWritableValue `json:"rule,omitempty"`
+	Rule             *ObjectLockRuleWritableValue `json:"rule"`
 }
 
 func (v ObjectLockValue) ToCreate() *ObjectLockWritableValue {
@@ -4731,7 +4729,7 @@ func (v ObjectLockValue) ToCreate() *ObjectLockWritableValue {
 		return res
 	}
 
-	if !v.Rule.IsNull() {
+	if !v.Rule.IsNull() && !v.Rule.IsUnknown() {
 		res.Rule = v.Rule.ToCreate()
 	}
 	return res
@@ -4750,15 +4748,13 @@ func (v *ObjectLockValue) UnmarshalJSON(data []byte) error {
 }
 
 func (v *ObjectLockValue) MergeWith(other *ObjectLockValue) {
-	if (v.Status.IsUnknown() || v.Status.IsNull()) && !other.Status.IsUnknown() {
+	if !other.Status.IsUnknown() {
 		v.Status = other.Status
 	}
-	if v.Rule.IsUnknown() && !other.Rule.IsUnknown() {
+	if !other.Rule.IsUnknown() {
 		v.Rule = other.Rule
-	} else if !other.Rule.IsUnknown() {
-		v.Rule.MergeWith(&other.Rule)
 	}
-	if (v.state == attr.ValueStateUnknown || v.state == attr.ValueStateNull) && other.state != attr.ValueStateUnknown {
+	if other.state != attr.ValueStateUnknown {
 		v.state = other.state
 	}
 }
@@ -4852,5 +4848,53 @@ func (v ObjectLockValue) AttributeTypes(ctx context.Context) map[string]attr.Typ
 	return map[string]attr.Type{
 		"status": ovhtypes.TfStringType{},
 		"rule":   ObjectLockRuleValue{}.Type(ctx),
+	}
+}
+
+// TODO: Cleanup later and add comments about the purpose of these custom modifiers and the story behind them
+// customObjectLockModifier forces replacement when object_lock is removed from HCL
+type customObjectLockModifier struct{}
+
+func (m customObjectLockModifier) Description(_ context.Context) string {
+	return "Forces replacement when object_lock is removed from HCL"
+}
+
+func (m customObjectLockModifier) MarkdownDescription(_ context.Context) string {
+	return m.Description(context.TODO())
+}
+
+func (m customObjectLockModifier) PlanModifyObject(ctx context.Context, req planmodifier.ObjectRequest, resp *planmodifier.ObjectResponse) {
+	// 1. If the resource is being created, do nothing
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() {
+		return
+	}
+
+	// 2. CHECK THE CONFIG: Is the block missing from the .tf file?
+	if req.ConfigValue.IsNull() {
+		var stateObj ObjectLockValue
+		diags := req.StateValue.As(ctx, &stateObj, basetypes.ObjectAsOptions{})
+		if diags.HasError() {
+			return
+		}
+
+		// 3. If it was enabled in state, we MUST force a null plan AND a replacement
+		if stateObj.Status.ValueString() == "enabled" {
+			// Force the Plan to be Null (this tells Terraform the block is being deleted)
+			resp.PlanValue = types.ObjectNull(req.PlanValue.AttributeTypes(ctx))
+
+			// Force the resource to be recreated
+			resp.RequiresReplace = true
+		}
+	}
+}
+
+// customRuleNullifier ensures the plan shows the rule being removed when deleted from HCL
+type customRuleNullifier struct{}
+
+func (m customRuleNullifier) PlanModifyObject(ctx context.Context, req planmodifier.ObjectRequest, resp *planmodifier.ObjectResponse) {
+	// If the parent (object_lock) exists in config, but this child (rule) was removed
+	if !req.ConfigValue.IsNull() && req.ConfigValue.IsNull() && !req.StateValue.IsNull() {
+		// Null out the plan so the Update function sees the change
+		resp.PlanValue = types.ObjectNull(req.PlanValue.AttributeTypes(ctx))
 	}
 }

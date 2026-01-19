@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/ovh/go-ovh/ovh"
 	ovhtypes "github.com/ovh/terraform-provider-ovh/v2/ovh/types"
@@ -50,6 +51,38 @@ func (d *cloudProjectStorageResource) Schema(ctx context.Context, req resource.S
 	resp.Schema = CloudProjectRegionStorageResourceSchema(ctx)
 }
 
+func (r *cloudProjectStorageResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// 1. Skip if the entire resource is being created or destroyed
+	if req.State.Raw.IsNull() || req.Plan.Raw.IsNull() {
+		return
+	}
+
+	// 2. Extract the Configuration and State for the object_lock attribute
+	var config, state, plan ObjectLockValue
+
+	// We check the Config to see if the user removed the block
+	req.Config.GetAttribute(ctx, path.Root("object_lock"), &config)
+	req.State.GetAttribute(ctx, path.Root("object_lock"), &state)
+	req.Plan.GetAttribute(ctx, path.Root("object_lock"), &plan)
+
+	// 3. Logic: If it's in State (Enabled) but NOT in Config (Removed)
+	if config.IsNull() && !state.IsNull() {
+		if state.Status.ValueString() == "enabled" {
+			// A. Force the attribute in the Plan to be Null (this breaks the "No Changes" loop)
+			resp.Plan.SetAttribute(ctx, path.Root("object_lock"), types.ObjectNull(plan.AttributeTypes(ctx)))
+
+			// B. Explicitly trigger the resource replacement
+			resp.RequiresReplace = append(resp.RequiresReplace, path.Root("object_lock"))
+
+			// C. Add a helpful message to the CLI
+			resp.Diagnostics.AddWarning(
+				"Object Lock Removal Detected",
+				"Object Lock cannot be disabled on this bucket. Terraform will recreate the bucket to apply this change.",
+			)
+		}
+	}
+}
+
 func (r *cloudProjectStorageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	splits := strings.Split(req.ID, "/")
 	if len(splits) != 3 {
@@ -80,8 +113,20 @@ func (r *cloudProjectStorageResource) Create(ctx context.Context, req resource.C
 		return
 	}
 
+	// --- BEGIN object_lock null logic ---
+	if data.ObjectLock.IsNull() {
+		responseData.ObjectLock = NewObjectLockValueNull()
+	}
+	// --- END object_lock null logic ---
+
 	responseData.MergeWith(&data)
 	r.fixISO8601Diff(&data, &responseData)
+
+	// --- BEGIN object_lock null logic (after merge) ---
+	if data.ObjectLock.IsNull() {
+		responseData.ObjectLock = NewObjectLockValueNull()
+	}
+	// --- END object_lock null logic (after merge) ---
 
 	// Set the ID as composite key: service_name/region_name/name
 	compositeID := fmt.Sprintf("%s/%s/%s",
@@ -92,6 +137,12 @@ func (r *cloudProjectStorageResource) Create(ctx context.Context, req resource.C
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &responseData)...)
+
+	// --- BEGIN object_lock null override ---
+	if data.ObjectLock.IsNull() {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("object_lock"), types.ObjectNull(responseData.ObjectLock.AttributeTypes(ctx)))...)
+	}
+	// --- END object_lock null override ---
 }
 
 func (r *cloudProjectStorageResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -131,7 +182,27 @@ func (r *cloudProjectStorageResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
+	// Save API object_lock for drift detection
+	apiObjectLock := responseData.ObjectLock
+
 	responseData.MergeWith(&data)
+	responseData.ObjectLock = apiObjectLock
+
+	// --- BEGIN object_lock null logic ---
+	if data.ObjectLock.IsNull() {
+		// Set object_lock to null in state and skip merging API value
+		responseData.ObjectLock = NewObjectLockValueNull()
+		// Set the ID as composite key: service_name/region_name/name
+		compositeID := fmt.Sprintf("%s/%s/%s",
+			data.ServiceName.ValueString(),
+			data.RegionName.ValueString(),
+			data.Name.ValueString())
+		responseData.ID = ovhtypes.NewTfStringValue(compositeID)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &responseData)...)
+		return
+	}
+	// --- END object_lock null logic ---
+
 	r.fixISO8601Diff(&data, &responseData)
 
 	if data.HideObjects.ValueBool() {
