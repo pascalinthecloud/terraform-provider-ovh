@@ -299,6 +299,24 @@ func TestAccCloudProjectRegionStorage_withObjectLock(t *testing.T) {
 					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P364D"),
 				),
 			},
-		},
+			// Case 7: P1Y (1 Year) -> Test year-based duration
+			{
+				Config: fmt.Sprintf(`
+					resource "ovh_cloud_project_storage" "storage" {
+						service_name = "%s"
+						region_name = "GRA"
+						name = "%s"
+						object_lock = {
+							status = "enabled"
+							rule = {
+								mode = "compliance"
+								period = "P1Y"
+							}
+						}
+					}`, serviceName, bucketName),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("ovh_cloud_project_storage.storage", "object_lock.rule.period", "P1Y"),
+				),
+			}},
 	})
 }
